@@ -111,6 +111,27 @@ class AnalyzerTest {
     }
 
     @Test
+    void detectsExtentReportsUsage() {
+        var r = rules("""
+            import com.aventstack.extentreports.ExtentReports;
+            class Reporting {
+                private ExtentReports extent = new ExtentReports();
+                ExtentSparkReporter spark = new ExtentSparkReporter("target/extent.html");
+                void m() {
+                    ExtentTest test = extent.createTest("login");
+                    test.pass("ok");
+                }
+            }""");
+        assertTrue(r.contains("MIG-018"));
+        // each creation or declaration is flagged once: extent (creation), spark (creation), test (declaration)
+        assertEquals(3, r.stream().filter("MIG-018"::equals).count());
+
+        var clean = rules("""
+            class Plain { void m() { System.out.println("no reporting here"); } }""");
+        assertFalse(clean.contains("MIG-018"));
+    }
+
+    @Test
     void detectsRetryAndScreenshotListener() {
         var r = rules("""
             class R implements IRetryAnalyzer { public boolean retry(ITestResult t) { return true; } }
