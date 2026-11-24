@@ -7,6 +7,7 @@ import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
@@ -25,6 +26,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.seleniumboot.migrator.Finding.Status.AUTO;
@@ -36,6 +38,9 @@ public final class Analyzer {
     private static final Set<String> DRIVER_LIFECYCLE_ANNOTATIONS = Set.of(
             "BeforeMethod", "AfterMethod", "BeforeClass", "AfterClass", "BeforeTest", "AfterTest",
             "BeforeSuite", "AfterSuite", "Before", "After", "BeforeEach", "AfterEach", "BeforeAll", "AfterAll");
+
+    private static final String MIG_019_ADVICE =
+            "Properties-based config: move these values to selenium-boot.yml (see docs.seleniumboot.com/docs/configuration).";
 
     private final JavaParser parser = new JavaParser(
             new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_25));
@@ -146,6 +151,29 @@ public final class Analyzer {
                         "Remove; mixing implicit and explicit waits causes flakiness."));
             }
         });
+        // MIG-019: Properties-based config (flag only; Selenium Boot uses selenium-boot.yml)
+        Set<String> propertiesVars = cu.findAll(VariableDeclarator.class).stream()
+                .filter(v -> v.getType().isClassOrInterfaceType()
+                        && v.getType().asClassOrInterfaceType().getNameAsString().equals("Properties"))
+                .map(VariableDeclarator::getNameAsString)
+                .collect(Collectors.toSet());
+        cu.findAll(MethodCallExpr.class).forEach(m -> {
+            if (m.getNameAsString().equals("load") && m.getScope()
+                    .filter(sc -> sc.isNameExpr() && propertiesVars.contains(sc.asNameExpr().getNameAsString()))
+                    .isPresent()) {
+                out.add(new Finding("MIG-019", MANUAL, file, line(m), "Properties.load(...)", MIG_019_ADVICE));
+            }
+            if (m.getNameAsString().equals("getResourceAsStream")
+                    && m.getArguments().stream().anyMatch(this::isPropertiesFileLiteral)) {
+                out.add(new Finding("MIG-019", MANUAL, file, line(m),
+                        "getResourceAsStream(\"....properties\")", MIG_019_ADVICE));
+            }
+        });
+        cu.findAll(ObjectCreationExpr.class).stream()
+                .filter(e -> e.getType().getNameAsString().equals("FileInputStream")
+                        && e.getArguments().stream().anyMatch(this::isPropertiesFileLiteral))
+                .forEach(e -> out.add(new Finding("MIG-019", MANUAL, file, line(e),
+                        "new FileInputStream(\"....properties\")", MIG_019_ADVICE)));
         // MIG-015: custom DriverManager (flag only)
         cu.findAll(ClassOrInterfaceDeclaration.class).stream()
                 .filter(c -> c.getNameAsString().endsWith("DriverManager") || c.getNameAsString().endsWith("DriverFactory"))
@@ -163,6 +191,10 @@ public final class Analyzer {
                     ? "Delete the lifecycle glue; extend BaseTest. Driver creation, per-thread isolation, and teardown are handled for you."
                     : "Remove the driver setup; keep the rest."));
             });
+    }
+
+    private boolean isPropertiesFileLiteral(Expression e) {
+        return e.isStringLiteralExpr() && e.asStringLiteralExpr().asString().endsWith(".properties");
     }
 
     private boolean isDriverLifecycleMethod(MethodDeclaration method) {
