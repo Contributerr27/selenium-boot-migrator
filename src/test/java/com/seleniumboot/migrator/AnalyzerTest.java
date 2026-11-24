@@ -478,4 +478,27 @@ class AnalyzerTest {
         assertEquals(100, report.estimatedConfidence());
     }
 
+    @Test
+    void detectsPropertiesBasedConfig() {
+        var r = rules("""
+            import java.util.Properties;
+            class ConfigTest {
+                void setup() throws Exception {
+                    Properties props = new Properties();
+                    props.load(new FileInputStream("config.properties"));
+                    var url = ConfigTest.class.getResourceAsStream("/env.properties");
+                }
+            }""");
+        assertEquals(3, r.stream().filter(id -> id.equals("MIG-019")).count());
+    }
+
+    @Test
+    void plainTestClassGivesNoPropertiesFinding() {
+        var r = rules("""
+            class PlainTest {
+                void testLogin() { driver.findElement(By.id("login")).click(); }
+            }""");
+        assertFalse(r.contains("MIG-019"));
+    }
+
 }
