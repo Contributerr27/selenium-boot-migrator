@@ -7,6 +7,7 @@ import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
@@ -32,6 +33,8 @@ import static com.seleniumboot.migrator.Finding.Status.MANUAL;
 
 /** Read-only static analysis: parses Java sources and reports patterns that map onto Selenium Boot. */
 public final class Analyzer {
+
+    private static final Set<String> EXTENT_TYPES = Set.of("ExtentReports", "ExtentTest", "ExtentSparkReporter");
 
     private static final Set<String> DRIVER_LIFECYCLE_ANNOTATIONS = Set.of(
             "BeforeMethod", "AfterMethod", "BeforeClass", "AfterClass", "BeforeTest", "AfterTest",
@@ -151,6 +154,19 @@ public final class Analyzer {
                 .filter(c -> c.getNameAsString().endsWith("DriverManager") || c.getNameAsString().endsWith("DriverFactory"))
                 .forEach(c -> out.add(new Finding("MIG-015", MANUAL, file, line(c), c.getNameAsString(),
                         "Custom driver lifecycle: review, then replace with BaseTest.")));
+        // MIG-018: ExtentReports usage (flag only; Selenium Boot writes its own HTML report)
+        cu.findAll(ObjectCreationExpr.class).stream()
+                .filter(e -> EXTENT_TYPES.contains(e.getType().getNameAsString()))
+            .forEach(e -> out.add(new Finding("MIG-018", MANUAL, file, line(e),
+                    "new " + e.getType().getNameAsString() + "(...)",
+                    "ExtentReports: Selenium Boot generates an HTML report out of the box; remove after migrating custom logging to StepLogger.")));
+        cu.findAll(VariableDeclarator.class).stream()
+                .filter(v -> v.getType().isClassOrInterfaceType()
+                        && EXTENT_TYPES.contains(v.getType().asClassOrInterfaceType().getNameAsString()))
+                .filter(v -> v.getInitializer().map(init -> !init.isObjectCreationExpr()).orElse(true))
+            .forEach(v -> out.add(new Finding("MIG-018", MANUAL, file, line(v),
+                    v.getType().asString() + " " + v.getNameAsString(),
+                    "ExtentReports: Selenium Boot generates an HTML report out of the box; remove after migrating custom logging to StepLogger.")));
         // MIG-017: driver lifecycle managed in TestNG or JUnit setup/teardown methods
         cu.findAll(MethodDeclaration.class).stream()
                 .filter(this::isDriverLifecycleMethod)
